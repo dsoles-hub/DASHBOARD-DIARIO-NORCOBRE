@@ -3,7 +3,6 @@ import pandas as pd
 import datetime
 import openpyxl
 import requests
-import io
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -20,18 +19,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 1. DESCARGA EN VIVO DESDE SHAREPOINT / ONEDRIVE
+# 1. DESCARGA EN VIVO DESDE GOOGLE SHEETS
 # -------------------------------------------------------------
-SHAREPOINT_LINK = "https://norcobre-my.sharepoint.com/:x:/g/personal/dsoles_norcobre_com_pe/IQBBRwFlkC24QKdxiPtWN6e9AVSgiOmKMvBXQ0hEejNbBlA"
-URL_DESCARGA = f"{SHAREPOINT_LINK.split('?')[0]}?download=1"
+SHEET_ID = "1jgDh1ddqOVcNBsc4HEuCbjt0moOGDrMz"
+URL_DESCARGA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
 
-@st.cache_data(ttl=60)  # Actualiza los datos cada 60 segundos
+@st.cache_data(ttl=60)
 def cargar_datos():
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
-    }
-    response = requests.get(URL_DESCARGA, headers=headers)
-    response.raise_for_status()
+    response = requests.get(URL_DESCARGA)
     with open("temp_data.xlsx", "wb") as f:
         f.write(response.content)
     return "temp_data.xlsx"
@@ -39,7 +34,7 @@ def cargar_datos():
 try:
     excel_file = cargar_datos()
 except Exception as e:
-    st.error(f"Error al conectar con SharePoint/OneDrive. Verifica que los permisos del enlace permitan descarga libre: {e}")
+    st.error(f"Error al conectar con Google Sheets: {e}")
     st.stop()
 
 # Parámetros Económicos
@@ -50,7 +45,7 @@ AG_PRICE = 53.05
 FACTOR_TN_LBS = 2204.62
 
 # -------------------------------------------------------------
-# 2. LECTURA DE HOJAS DE EXCEL
+# 2. LECTURA DE HOJAS
 # -------------------------------------------------------------
 # A) MES PPT
 df_ppt_raw = pd.read_excel(excel_file, sheet_name='MES PPT')
@@ -135,7 +130,7 @@ for r in range(1, ws_agosto.max_row + 1):
     }
 
 # -------------------------------------------------------------
-# 3. TRANSFORMACIÓN Y CÁLCULOS
+# 3. TRANSFORMACIÓN Y TABLA
 # -------------------------------------------------------------
 base_date = datetime.date(2026, 7, 26)
 date_list = [base_date + datetime.timedelta(days=i) for i in range(31)]
@@ -191,8 +186,11 @@ promedio_diario = (ejecutado_total / dias_con_datos) if dias_con_datos > 0 else 
 # -------------------------------------------------------------
 # 4. RENDERIZAR DASHBOARD EN STREAMLIT
 # -------------------------------------------------------------
+
+# Título Limpio
 st.markdown("<h2 style='text-align: center; color: white;'>Reporte Diario de Planta - Balance Metalúrgico</h2>", unsafe_allow_html=True)
 
+# Formatear listas de texto limpias (ocultando ceros para evitar amontonamiento)
 text_mensual_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['MENSUAL Lb Cu Eq']]
 text_ejec_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['Lbs Cu Eq']]
 text_mensual_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['MENSUAL TRAT']]
@@ -201,22 +199,26 @@ text_ejec_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['EJEC TRAT']]
 # Gráfico Principal
 fig_main = make_subplots(specs=[[{"secondary_y": True}]])
 
+# Barras Mensual
 fig_main.add_trace(go.Bar(
     x=df_res['Etiqueta'], y=df_res['MENSUAL Lb Cu Eq'], name='MENSUAL Lb Cu Eq', marker_color='#2A629A',
     text=text_mensual_lbs, textposition='inside', textfont=dict(size=9, color='white')
 ), secondary_y=False)
 
+# Barras Ejecutado
 fig_main.add_trace(go.Bar(
     x=df_res['Etiqueta'], y=df_res['Lbs Cu Eq'], name='EJECUTADO Lb Cu Eq', marker_color='#FF7F3E',
     text=text_ejec_lbs, textposition='inside', textfont=dict(size=9, color='white')
 ), secondary_y=False)
 
+# Línea Plan Tratamiento
 fig_main.add_trace(go.Scatter(
     x=df_res['Etiqueta'], y=df_res['MENSUAL TRAT'], name='PLAN MENSUAL TMS TRAT', mode='lines+markers+text',
     line=dict(color='#FF2E63', width=2), marker=dict(size=4),
     text=text_mensual_trat, textposition='top center', textfont=dict(size=8, color='#FF2E63')
 ), secondary_y=True)
 
+# Línea Ejecutado Tratamiento (Solo grafica donde hay datos reales > 0)
 ejec_trat_masked = [x if x > 0 else None for x in df_res['EJEC TRAT']]
 fig_main.add_trace(go.Scatter(
     x=df_res['Etiqueta'], y=ejec_trat_masked, name='EJECUTADO TMS TRAT', mode='lines+markers+text',
@@ -225,16 +227,21 @@ fig_main.add_trace(go.Scatter(
 ), secondary_y=True)
 
 fig_main.update_layout(
-    template='plotly_dark', height=480, barmode='group',
+    template='plotly_dark',
+    height=480,
+    barmode='group',
     legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='center', x=0.5, font=dict(size=11)),
-    margin=dict(l=30, r=30, t=40, b=30), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    margin=dict(l=30, r=30, t=40, b=30),
+    paper_bgcolor='rgba(0,0,0,0)',
+    plot_bgcolor='rgba(0,0,0,0)'
 )
 fig_main.update_xaxes(tickangle=-45, tickfont=dict(size=10))
 fig_main.update_yaxes(title_text="<b>Lb Cu Eq (Miles)</b>", secondary_y=False, showgrid=True, gridcolor='#333333')
 fig_main.update_yaxes(title_text="<b>Tratamiento (TMS)</b>", secondary_y=True, showgrid=False)
 
 st.plotly_chart(fig_main, use_container_width=True)
-st.write("")
+
+st.write("") # Espaciador
 
 # Sección Inferior (2 gráficos secundarios + 2 KPIs)
 col1, col2, col3, col4 = st.columns([1.1, 1.0, 0.9, 0.9])
