@@ -21,7 +21,7 @@ st.markdown("""
 # -------------------------------------------------------------
 # 1. DESCARGA EN VIVO DESDE GOOGLE SHEETS
 # -------------------------------------------------------------
-SHEET_ID = "1jgDh1ddqOVcNBsc4HEuCbjt0moOGDrMz"
+SHEET_ID = "16qHmnhtgGDETeOCeahGZ-Ka_8a2d0KYH"
 URL_DESCARGA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
 
 @st.cache_data(ttl=60)
