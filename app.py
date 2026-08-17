@@ -1,53 +1,27 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import io
-import requests
 import openpyxl
+import requests
+import io
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# -------------------------------------------------------------
-# CONFIGURACIÓN DE PÁGINA
-# -------------------------------------------------------------
+# Configuración de la página
 st.set_page_config(page_title="Dashboard Planta - Balance Metalúrgico", layout="wide")
 
+# Ocultar menú superior y footer de Streamlit
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    .kpi-card {
-        background-color: #1E293B;
-        border: 1px solid #334155;
-        border-radius: 8px;
-        padding: 15px;
-        text-align: center;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    .kpi-title {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: #94A3B8;
-        margin-bottom: 5px;
-    }
-    .kpi-value {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #38BDF8;
-    }
     </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 1. PARÁMETROS ECONÓMICOS Y CARGA EN MEMORIA
+# 1. DESCARGA EN VIVO DESDE GOOGLE SHEETS
 # -------------------------------------------------------------
-CU_PRICE = 11084.00
-PB_PRICE = 1981.00
-ZN_PRICE = 3041.00
-AG_PRICE = 53.05
-FACTOR_TN_LBS = 2204.62
-
 SHEET_ID = "16qHmnhtgGDETeOCeahGZ-Ka_8a2d0KYH"
 URL_DESCARGA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
 
@@ -63,11 +37,17 @@ except Exception as e:
     st.error(f"Error al conectar con Google Sheets: {e}")
     st.stop()
 
-# -------------------------------------------------------------
-# 2. PROCESAMIENTO DE DATOS
-# -------------------------------------------------------------
+# Parámetros Económicos
+CU_PRICE = 11084.00
+PB_PRICE = 1981.00
+ZN_PRICE = 3041.00
+AG_PRICE = 53.05
+FACTOR_TN_LBS = 2204.62
 
-# A) PROCESAR 'MES PPT'
+# -------------------------------------------------------------
+# 2. LECTURA DE HOJAS (DASHBOARD 1: BALANCE METALÚRGICO)
+# -------------------------------------------------------------
+# A) MES PPT
 excel_stream.seek(0)
 df_ppt_raw = pd.read_excel(excel_stream, sheet_name='MES PPT')
 df_ppt_raw.columns = df_ppt_raw.iloc[0]
@@ -99,7 +79,7 @@ for _, row in df_ppt.iterrows():
 
         mensual_lbs_dict[f_str] = lbs_cueq_ppt
 
-# B) PROCESAR HOJA DE TRATAMIENTO
+# B) TRATAMIENTO
 excel_stream.seek(0)
 xl = pd.ExcelFile(excel_stream)
 sheet_trat_name = next((s for s in xl.sheet_names if 'TRAT' in s.upper()), None)
@@ -119,49 +99,40 @@ if sheet_trat_name:
             ejec_trat_dict[f_str] = float(ejec_val) if pd.notna(ejec_val) else 0.0
             mensual_trat_dict[f_str] = float(mens_val) if pd.notna(mens_val) else 0.0
 
-# C) PROCESAR HOJA 'AGOSTO'
+# C) AGOSTO
 excel_stream.seek(0)
 wb_in = openpyxl.load_workbook(excel_stream, data_only=True)
 sheet_agosto_name = next((s for s in wb_in.sheetnames if 'AGOSTO' in s.strip().upper()), 'AGOSTO')
 ws_agosto = wb_in[sheet_agosto_name]
 
 agosto_data_dict = {}
-
 def clean_val(val):
-    try:
-        return float(val) if val is not None else 0.0
-    except (ValueError, TypeError):
-        return 0.0
+    try: return float(val) if val is not None else 0.0
+    except: return 0.0
 
 for r in range(1, ws_agosto.max_row + 1):
     val_a = ws_agosto.cell(row=r, column=1).value
-    if not val_a:
-        continue
-    
+    if not val_a: continue
     f_str = None
     if isinstance(val_a, (datetime.datetime, datetime.date)):
         f_str = val_a.strftime("%d/%m/%Y")
     else:
-        try:
-            f_str = pd.to_datetime(str(val_a).strip(), dayfirst=True).strftime("%d/%m/%Y")
-        except Exception:
-            continue
-            
-    if not f_str:
-        continue
+        try: f_str = pd.to_datetime(str(val_a).strip(), dayfirst=True).strftime("%d/%m/%Y")
+        except: continue
+    if not f_str: continue
 
     zn_tms, pb_tms, cu_tms, ag_cu, ag_pb, ag_zn = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     for sub_r in range(r, min(r + 15, ws_agosto.max_row + 1)):
         prod_raw = str(ws_agosto.cell(row=sub_r, column=1).value or '').replace(" ", "").upper()
         if 'CONC.CU' in prod_raw:
             cu_tms = clean_val(ws_agosto.cell(row=sub_r, column=9).value)
-            ag_cu = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
+            ag_cu  = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
         elif 'CONC.PB' in prod_raw:
             pb_tms = clean_val(ws_agosto.cell(row=sub_r, column=10).value)
-            ag_pb = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
+            ag_pb  = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
         elif 'CONC.ZN' in prod_raw:
             zn_tms = clean_val(ws_agosto.cell(row=sub_r, column=11).value)
-            ag_zn = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
+            ag_zn  = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
 
     agosto_data_dict[f_str] = {
         'cu_tms': cu_tms, 'pb_tms': pb_tms, 'zn_tms': zn_tms,
@@ -169,7 +140,7 @@ for r in range(1, ws_agosto.max_row + 1):
     }
 
 # -------------------------------------------------------------
-# 3. CONSTRUCCIÓN DE LA TABLA CONSOLIDADA
+# 3. TRANSFORMACIÓN Y TABLA BALANCE METALÚRGICO
 # -------------------------------------------------------------
 base_date = datetime.date(2026, 7, 26)
 date_list = [base_date + datetime.timedelta(days=i) for i in range(31)]
@@ -204,35 +175,34 @@ for d in date_list:
 headers = [
     'Fecha', 'Etiqueta', 'Zn (TMS)', 'Pb (TMS)', 'Cu (TMS)', 'Ag en Cu (Oz)', 'Ag en Pb (Oz)', 'Ag en Zn (Oz)',
     '$ Zn', '$ Pb', '$ Ag', '$ TOTALES', 'CuEq sin Cont. Metal. de Cu', 'Cu Equivalente TMS',
-    'Factor conversion Tn a Lbs', 'Lbs Cu Eq', 'MENSUAL Lb Cu Eq', 'MENSUAL TRAT', 'EJEC TRAT'
+    'Factor converion Tn a Lbs', 'Lbs Cu Eq', 'MENSUAL Lb Cu Eq', 'MENSUAL TRAT', 'EJEC TRAT'
 ]
 df_res = pd.DataFrame(rows_data, columns=headers)
 
-# KPI Calculations
+# Cálculos KPI 1
 df_ejecutado = df_res[df_res['Lbs Cu Eq'] > 0]
 dias_con_datos = len(df_ejecutado)
 
 ejecutado_total = df_ejecutado['Lbs Cu Eq'].sum()
 mensual_total = df_res['MENSUAL Lb Cu Eq'].sum()
 
-mensual_a_la_fecha = df_res.iloc[:dias_con_datos]['MENSUAL Lb Cu Eq'].sum() if dias_con_datos > 0 else 0.0
-proyeccion_restante = df_res.iloc[dias_con_datos:]['MENSUAL Lb Cu Eq'].sum() if dias_con_datos < len(df_res) else 0.0
+mensual_a_la_fecha = df_res.iloc[:dias_con_datos]['MENSUAL Lb Cu Eq'].sum()
+proyeccion_restante = df_res.iloc[dias_con_datos:]['MENSUAL Lb Cu Eq'].sum()
 ejec_mas_proy = ejecutado_total + proyeccion_restante
 
-cumplimiento_pct = (ejecutado_total / mensual_a_la_fecha * 100) if mensual_a_la_fecha > 0 else 0.0
-promedio_diario = (ejecutado_total / dias_con_datos) if dias_con_datos > 0 else 0.0
+cumplimiento_pct = (ejecutado_total / mensual_a_la_fecha * 100) if mensual_a_la_fecha > 0 else 0
+promedio_diario = (ejecutado_total / dias_con_datos) if dias_con_datos > 0 else 0
 
 # -------------------------------------------------------------
-# 4. DASHBOARD STYLING & RENDERING
+# 4. RENDERIZAR DASHBOARD 1: BALANCE METALÚRGICO
 # -------------------------------------------------------------
-st.title("Reporte Diario de Planta - Balance Metalúrgico")
+st.markdown("<h2 style='text-align: center; color: white;'>Reporte Diario de Planta - Balance Metalúrgico</h2>", unsafe_allow_html=True)
 
 text_mensual_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['MENSUAL Lb Cu Eq']]
 text_ejec_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['Lbs Cu Eq']]
 text_mensual_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['MENSUAL TRAT']]
 text_ejec_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['EJEC TRAT']]
 
-# Gráfico Principal
 fig_main = make_subplots(specs=[[{"secondary_y": True}]])
 
 fig_main.add_trace(go.Bar(
@@ -273,7 +243,8 @@ fig_main.update_yaxes(title_text="<b>Tratamiento (TMS)</b>", secondary_y=True, s
 
 st.plotly_chart(fig_main, use_container_width=True)
 
-# Sección de Resumen e Indicadores
+st.write("") 
+
 col1, col2, col3, col4 = st.columns([1.1, 1.0, 0.9, 0.9])
 
 with col1:
@@ -288,7 +259,7 @@ with col1:
         title=dict(text="<b>CUMPLIMIENTO MENSUAL</b>", x=0.5, font=dict(size=12, color='white')),
         template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(ejec_mas_proy, mensual_total, 1.0) * 1.25])
+        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(ejec_mas_proy, mensual_total) * 1.25])
     )
     st.plotly_chart(fig_mensual, use_container_width=True)
 
@@ -304,253 +275,166 @@ with col2:
         title=dict(text="<b>CUMPLIMIENTO A LA FECHA</b>", x=0.5, font=dict(size=12, color='white')),
         template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(mensual_a_la_fecha, ejecutado_total, 1.0) * 1.25])
+        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(mensual_a_la_fecha, ejecutado_total) * 1.25])
     )
     st.plotly_chart(fig_a_fecha, use_container_width=True)
 
 with col3:
     st.markdown(f"""
-        <div class="kpi-card">
-            <div class="kpi-title">CUMPLIMIENTO A LA FECHA</div>
-            <div class="kpi-value">{cumplimiento_pct:.0f}%</div>
+        <div style="background-color: #1A2536; border: 1px solid #2E3E52; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
+            <div style="font-size: 13px; font-weight: bold; color: #8A99AD; margin-bottom: 8px;">CUMPLIMIENTO A LA FECHA</div>
+            <div style="font-size: 40px; font-weight: 900; color: #38BDF8; font-family: 'Arial Black';">{cumplimiento_pct:.0f}%</div>
         </div>
     """, unsafe_allow_html=True)
 
 with col4:
     st.markdown(f"""
-        <div class="kpi-card">
-            <div class="kpi-title">PROMEDIO EJECUTADO DIARIO</div>
-            <div class="kpi-value">{promedio_diario:,.0f}</div>
+        <div style="background-color: #1A2536; border: 1px solid #2E3E52; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
+            <div style="font-size: 13px; font-weight: bold; color: #8A99AD; margin-bottom: 8px;">PROMEDIO EJECUTADO DIARIO</div>
+            <div style="font-size: 40px; font-weight: 900; color: #38BDF8; font-family: 'Arial Black';">{promedio_diario:.0f}</div>
         </div>
     """, unsafe_allow_html=True)
 
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import streamlit as st
 
-# ==========================================
-# 1. CARGA Y PROCESAMIENTO DE DATOS
-# ==========================================
-def procesar_datos_produccion(df_planeamiento: pd.DataFrame, df_produccion: pd.DataFrame) -> pd.DataFrame:
+# =============================================================
+# 5. LECTURA Y PROCESAMIENTO - MÓDULO DE PRODUCCIÓN (DASHBOARD 2)
+# =============================================================
+st.markdown("<br><hr style='border-color: #333333;'><br>", unsafe_allow_html=True)
 
-    
-    # Renombrar TMS-ACUMULADO a EJECUTADO en la hoja de producción
-    df_prod = df_produccion[['FECHA', 'TMS-ACUMULADO']].copy()
-    df_prod.rename(columns={'TMS-ACUMULADO': 'EJECUTADO'}, inplace=True)
-    
-    # Asegurar formato de fecha para la unión
-    df_planeamiento['FECHA'] = pd.to_datetime(df_planeamiento['FECHA'])
-    df_prod['FECHA'] = pd.to_datetime(df_prod['FECHA'])
-    
-    # Unir ambas tablas por FECHA
-    df_merged = pd.merge(df_planeamiento, df_prod, on='FECHA', how='left')
-    
-    # Condición: Actualizar 'EJEC + PROYEC' con el valor de 'EJECUTADO' donde exista dato
-    df_merged['EJEC_PROYEC_ACTUALIZADO'] = np.where(
-        df_merged['EJECUTADO'].notnull() & (df_merged['EJECUTADO'] > 0),
-        df_merged['EJECUTADO'],
-        df_merged['EJEC + PROYEC']
+# Lector de pestañas 'PLANEAMIENTO' y 'PRODUCCION'
+try:
+    excel_stream.seek(0)
+    df_plan_raw = pd.read_excel(excel_stream, sheet_name='PLANEAMIENTO')
+    excel_stream.seek(0)
+    df_prod_raw = pd.read_excel(excel_stream, sheet_name='PRODUCCION')
+
+    # Renombrar TMS-ACUMULADO a EJECUTADO
+    if 'TMS-ACUMULADO' in df_prod_raw.columns:
+        df_prod_raw = df_prod_raw.rename(columns={'TMS-ACUMULADO': 'EJECUTADO'})
+
+    # Formatear fechas
+    df_plan_raw['FECHA'] = pd.to_datetime(df_plan_raw['FECHA'])
+    df_prod_raw['FECHA'] = pd.to_datetime(df_prod_raw['FECHA'])
+
+    # Fusión por fecha
+    df_prod_mix = pd.merge(df_plan_raw, df_prod_raw[['FECHA', 'EJECUTADO']], on='FECHA', how='left')
+
+    # Actualización de EJEC + PROYEC: Si hay EJECUTADO > 0, se asigna EJECUTADO; de lo contrario se deja el proyectado
+    df_prod_mix['EJEC + PROYEC'] = df_prod_mix.apply(
+        lambda r: r['EJECUTADO'] if (pd.notna(r['EJECUTADO']) and r['EJECUTADO'] > 0) else r['EJEC + PROYEC'],
+        axis=1
     )
-    
-    # Formatear la fecha para visualización en gráficos (ej: 26 - Jul)
-    df_merged['FECHA_STR'] = df_merged['FECHA'].dt.strftime('%d - %b')
-    
-    return df_merged
 
-# ==========================================
-# 2. GENERACIÓN DE GRÁFICOS Y CARDS
-# ==========================================
-def generar_panel_produccion(df_data: pd.DataFrame):
-    
-    # ------------------------------------------
-    # A. CÁLCULOS KPI
-    # ------------------------------------------
-    # Máscara para días que ya tienen dato ejecutado
-    mask_ejecutado = df_data['EJECUTADO'].notnull() & (df_data['EJECUTADO'] > 0)
-    
-    total_ejecutado = df_data.loc[mask_ejecutado, 'EJECUTADO'].sum()
-    total_ejec_proy = df_data['EJEC_PROYEC_ACTUALIZADO'].sum()
-    total_mensual_completo = df_data['MENSUAL'].sum()
-    
-    # Mensual acumulado únicamente hasta la fecha que se tiene dato ejecutado
-    total_mensual_a_la_fecha = df_data.loc[mask_ejecutado, 'MENSUAL'].sum()
-    
-    # % Cumplimiento a la fecha
-    pct_cumplimiento = (total_ejecutado / total_mensual_a_la_fecha * 100) if total_mensual_a_la_fecha > 0 else 0
-    
-    # Promedio ejecutado diario (solo de días transcurridos con dato)
-    promedio_diario = df_data.loc[mask_ejecutado, 'EJECUTADO'].mean() if mask_ejecutado.sum() > 0 else 0
+    df_prod_mix['Etiqueta'] = df_prod_mix['FECHA'].dt.strftime('%d - %b')
 
-    # ------------------------------------------
-    # B. GRÁFICO 1: PRODUCCIÓN DIARIA (TMS)
-    # ------------------------------------------
-    fig_diario = go.Figure()
+    # Cálculos KPI Producción
+    df_p_ejec = df_prod_mix[df_prod_mix['EJECUTADO'] > 0]
+    dias_p_ejec = len(df_p_ejec)
 
-    # Barras de EJECUTADO
-    fig_diario.add_trace(go.Bar(
-        x=df_data['FECHA_STR'],
-        y=df_data['EJECUTADO'],
-        name='EJECUTADO',
-        marker_color='#3B82F6', # Azul
-        text=df_data['EJECUTADO'].apply(lambda v: f"{int(v)}" if pd.notnull(v) and v > 0 else ""),
-        textposition='inside',
-        textfont=dict(color='white', size=11, family='Arial Black')
+    p_ejecutado_total = df_p_ejec['EJECUTADO'].sum()
+    p_ejec_proy_total = df_prod_mix['EJEC + PROYEC'].sum()
+    p_mensual_total = df_prod_mix['MENSUAL'].sum()
+
+    p_mensual_a_la_fecha = df_prod_mix.iloc[:dias_p_ejec]['MENSUAL'].sum() if dias_p_ejec > 0 else 0
+    p_cumplimiento_pct = (p_ejecutado_total / p_mensual_a_la_fecha * 100) if p_mensual_a_la_fecha > 0 else 0
+    p_promedio_diario = (p_ejecutado_total / dias_p_ejec) if dias_p_ejec > 0 else 0
+
+    # -------------------------------------------------------------
+    # 6. RENDERIZAR DASHBOARD 2: PRODUCCIÓN (TMS)
+    # -------------------------------------------------------------
+    st.markdown("<h2 style='text-align: center; color: white;'>PRODUCCIÓN (TMS)</h2>", unsafe_allow_html=True)
+
+    text_p_ejec = [f"{x:,.0f}" if (pd.notna(x) and x > 0) else "" for x in df_prod_mix['EJECUTADO']]
+    text_p_sem = [f"{x:,.0f}" if (pd.notna(x) and x > 0) else "" for x in df_prod_mix['SEMANAL']]
+    text_p_mens = [f"{x:,.0f}" if (pd.notna(x) and x > 0) else "" for x in df_prod_mix['MENSUAL']]
+
+    fig_p_main = go.Figure()
+
+    # Barras EJECUTADO
+    fig_p_main.add_trace(go.Bar(
+        x=df_prod_mix['Etiqueta'], y=df_prod_mix['EJECUTADO'], name='EJECUTADO', marker_color='#2A629A',
+        text=text_p_ejec, textposition='inside', textfont=dict(size=9, color='white')
     ))
 
     # Línea SEMANAL
-    fig_diario.add_trace(go.Scatter(
-        x=df_data['FECHA_STR'],
-        y=df_data['SEMANAL'],
-        name='SEMANAL',
-        mode='lines+markers+text',
-        line=dict(color='#EAB308', width=3), # Amarillo / Naranja
-        marker=dict(size=6),
-        text=df_data['SEMANAL'].apply(lambda v: f"{int(v)}" if pd.notnull(v) else ""),
-        textposition='top center',
-        textfont=dict(color='#854D0E', size=10)
+    fig_p_main.add_trace(go.Scatter(
+        x=df_prod_mix['Etiqueta'], y=df_prod_mix['SEMANAL'], name='SEMANAL', mode='lines+markers+text',
+        line=dict(color='#FFD700', width=2), marker=dict(size=5),
+        text=text_p_sem, textposition='top center', textfont=dict(size=8, color='#FFD700')
     ))
 
     # Línea MENSUAL
-    fig_diario.add_trace(go.Scatter(
-        x=df_data['FECHA_STR'],
-        y=df_data['MENSUAL'],
-        name='MENSUAL',
-        mode='lines+markers+text',
-        line=dict(color='#DC2626', width=3), # Rojo
-        marker=dict(size=6),
-        text=df_data['MENSUAL'].apply(lambda v: f"{int(v)}" if pd.notnull(v) else ""),
-        textposition='bottom center',
-        textfont=dict(color='#991B1B', size=10)
+    fig_p_main.add_trace(go.Scatter(
+        x=df_prod_mix['Etiqueta'], y=df_prod_mix['MENSUAL'], name='MENSUAL', mode='lines+markers+text',
+        line=dict(color='#FF2E63', width=2), marker=dict(size=4),
+        text=text_p_mens, textposition='bottom center', textfont=dict(size=8, color='#FF2E63')
     ))
 
-    fig_diario.update_layout(
-        title=dict(text="<b>PRODUCCIÓN (TMS)</b>", x=0.5, font=dict(size=20, color="black")),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        xaxis=dict(showgrid=False, tickangle=-45),
-        yaxis=dict(showgrid=True, gridcolor='#E5E7EB', range=[0, max(df_data['MENSUAL'].max(), df_data['SEMANAL'].max(), df_data['EJECUTADO'].max()) * 1.2]),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
-        height=450,
-        margin=dict(l=20, r=20, t=50, b=80)
+    fig_p_main.update_layout(
+        template='plotly_dark',
+        height=480,
+        legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='center', x=0.5, font=dict(size=11)),
+        margin=dict(l=30, r=30, t=40, b=30),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
     )
+    fig_p_main.update_xaxes(tickangle=-45, tickfont=dict(size=10))
+    fig_p_main.update_yaxes(title_text="<b>Producción (TMS)</b>", showgrid=True, gridcolor='#333333')
 
-    # Renderizar gráfico 1
-    st.plotly_chart(fig_diario, use_container_width=True)
+    st.plotly_chart(fig_p_main, use_container_width=True)
 
-    # ------------------------------------------
-    # C. GRÁFICOS INFERIORES Y TARJETAS KPI
-    # ------------------------------------------
-    col1, col2, col3 = st.columns([1.2, 1, 0.8])
+    st.write("") 
 
-    # --- Sub-Gráfico A: Producción (TMS) Totales ---
-    with col1:
-        fig_resumen = go.Figure()
-        
-        categorias = ['EJEC + PROY', 'EJECUTADO', 'MENSUAL']
-        valores = [total_ejec_proy, total_ejecutado, total_mensual_completo]
-        colores = ['#EF4444', '#F59E0B', '#3B82F6'] # Rojo, Amarillo, Azul
+    # Cuadros inferiores Producción (TMS)
+    p_col1, p_col2, p_col3, p_col4 = st.columns([1.1, 1.0, 0.9, 0.9])
 
-        fig_resumen.add_trace(go.Bar(
-            x=categorias,
-            y=valores,
-            marker_color=colores,
-            text=[f"<b>{int(v)}</b>" for v in valores],
-            textposition='outside',
-            width=0.5
+    with p_col1:
+        fig_p_mensual = go.Figure()
+        fig_p_mensual.add_trace(go.Bar(
+            x=['EJEC + PROY', 'EJECUTADO', 'MENSUAL'], y=[p_ejec_proy_total, p_ejecutado_total, p_mensual_total],
+            marker_color=['#E63946', '#FFB703', '#1D3557'],
+            text=[f"{p_ejec_proy_total:,.0f}", f"{p_ejecutado_total:,.0f}", f"{p_mensual_total:,.0f}"],
+            textposition='outside', textfont=dict(size=11, color='white')
         ))
-
-        fig_resumen.update_layout(
-            title=dict(text="<b>PRODUCCIÓN (TMS)</b>", x=0.5, font=dict(size=16, color="black")),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            yaxis=dict(showgrid=False, visible=False, range=[0, max(valores) * 1.25]),
-            xaxis=dict(showgrid=False),
-            height=300,
-            margin=dict(l=10, r=10, t=40, b=30)
+        fig_p_mensual.update_layout(
+            title=dict(text="<b>PRODUCCIÓN (TMS)</b>", x=0.5, font=dict(size=12, color='white')),
+            template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(p_ejec_proy_total, p_mensual_total, 1.0) * 1.25])
         )
-        st.plotly_chart(fig_resumen, use_container_width=True)
+        st.plotly_chart(fig_p_mensual, use_container_width=True)
 
-    # --- Sub-Gráfico B: Cumplimiento a la Fecha ---
-    with col2:
-        fig_cumplimiento = go.Figure()
-
-        cat_cumpl = ['MENSUAL', 'EJECUTADO']
-        val_cumpl = [total_mensual_a_la_fecha, total_ejecutado]
-        colores_cumpl = ['#3B82F6', '#F59E0B'] # Azul, Amarillo
-
-        fig_cumplimiento.add_trace(go.Bar(
-            x=cat_cumpl,
-            y=val_cumpl,
-            marker_color=colores_cumpl,
-            text=[f"<b>{int(v)}</b>" for v in val_cumpl],
-            textposition='outside',
-            width=0.4
+    with p_col2:
+        fig_p_a_fecha = go.Figure()
+        fig_p_a_fecha.add_trace(go.Bar(
+            x=['MENSUAL', 'EJECUTADO'], y=[p_mensual_a_la_fecha, p_ejecutado_total],
+            marker_color=['#1D3557', '#FFB703'],
+            text=[f"{p_mensual_a_la_fecha:,.0f}", f"{p_ejecutado_total:,.0f}"],
+            textposition='outside', textfont=dict(size=11, color='white')
         ))
-
-        fig_cumplimiento.update_layout(
-            title=dict(text="<b>CUMPLIMIENTO A LA FECHA</b>", x=0.5, font=dict(size=16, color="black")),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            yaxis=dict(showgrid=False, visible=False, range=[0, max(val_cumpl) * 1.25]),
-            xaxis=dict(showgrid=False),
-            height=300,
-            margin=dict(l=10, r=10, t=40, b=30)
+        fig_p_a_fecha.update_layout(
+            title=dict(text="<b>CUMPLIMIENTO A LA FECHA</b>", x=0.5, font=dict(size=12, color='white')),
+            template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(p_mensual_a_la_fecha, p_ejecutado_total, 1.0) * 1.25])
         )
-        st.plotly_chart(fig_cumplimiento, use_container_width=True)
+        st.plotly_chart(fig_p_a_fecha, use_container_width=True)
 
-    # --- Tarjetas KPI Verdes ---
-    with col3:
+    with p_col3:
         st.markdown(f"""
-            <div style="display: flex; flex-direction: column; gap: 15px; height: 100%; justify-content: center; padding-top: 20px;">
-                <div style="background-color: #84CC16; border: 1px solid #000; padding: 15px; border-radius: 4px; text-align: center;">
-                    <span style="font-weight: bold; font-size: 14px; color: black; display: block;">CUMPLIMIENTO A LA FECHA</span>
-                    <span style="font-weight: bold; font-size: 38px; color: black;">{int(round(pct_cumplimiento))}%</span>
-                </div>
-                <div style="background-color: #84CC16; border: 1px solid #000; padding: 15px; border-radius: 4px; text-align: center;">
-                    <span style="font-weight: bold; font-size: 14px; color: black; display: block;">PROMEDIO EJECUTADO DIARIO</span>
-                    <span style="font-weight: bold; font-size: 38px; color: black;">{int(round(promedio_diario))}</span>
-                </div>
+            <div style="background-color: #1A2536; border: 1px solid #2E3E52; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
+                <div style="font-size: 13px; font-weight: bold; color: #8A99AD; margin-bottom: 8px;">CUMPLIMIENTO A LA FECHA</div>
+                <div style="font-size: 40px; font-weight: 900; color: #38BDF8; font-family: 'Arial Black';">{p_cumplimiento_pct:.0f}%</div>
             </div>
         """, unsafe_allow_html=True)
 
+    with p_col4:
+        st.markdown(f"""
+            <div style="background-color: #1A2536; border: 1px solid #2E3E52; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
+                <div style="font-size: 13px; font-weight: bold; color: #8A99AD; margin-bottom: 8px;">PROMEDIO EJECUTADO DIARIO</div>
+                <div style="font-size: 40px; font-weight: 900; color: #38BDF8; font-family: 'Arial Black';">{p_promedio_diario:,.0f}</div>
+            </div>
+        """, unsafe_allow_html=True)
 
-# ==========================================
-# 3. EJEMPLO DE INTEGRACIÓN EN STREAMLIT
-# ==========================================
-if __name__ == "__main__":
-    st.set_page_config(layout="wide")
-    st.title("Dashboard General de Operaciones")
-
-    # Aquí iría tu código actual existente (ej: Balance Metalúrgico)
-    st.info("--- AQUÍ SE MANTIENE EL CÓDIGO EXISTENTE (E.G. BALANCE METALÚRGICO) ---")
-
-    st.markdown("<br><hr><br>", unsafe_allow_html=True)
-    st.header("Módulo de Planeamiento y Producción")
-
-    # Simulación de lectura de datos desde Excel
-    # df_planeamiento = pd.read_excel("BaseDatos.xlsx", sheet_name="PLANEAMIENTO")
-    # df_produccion = pd.read_excel("BaseDatos.xlsx", sheet_name="producción")
-
-    # Creamos un dataset de prueba idéntico a tus imágenes
-    fechas = pd.date_range(start="2026-07-26", end="2026-08-25")
-    df_plan_demo = pd.DataFrame({
-        'FECHA': fechas,
-        'SEMANAL': np.random.randint(2000, 2500, size=len(fechas)),
-        'MENSUAL': np.random.randint(2100, 2400, size=len(fechas)),
-        'EJEC + PROYEC': [2000]*len(fechas)
-    })
-    
-    # Producción ejecutada hasta el 15 de agosto (21 días)
-    ejec_vals = [1735, 1857, 2213, 1982, 2152, 2021, 1861, 1799, 1906, 1440, 540, 1939, 1922, 2015, 2077, 1856, 2265, 2014, 1993, 1862, 2105]
-    ejec_vals += [np.nan] * (len(fechas) - len(ejec_vals))
-    
-    df_prod_demo = pd.DataFrame({
-        'FECHA': fechas,
-        'TMS-ACUMULADO': ejec_vals
-    })
-
-    # Procesar y Renderizar debajo de los componentes existentes
-    df_procesado = procesar_datos_produccion(df_plan_demo, df_prod_demo)
-    generar_panel_produccion(df_procesado)
+except Exception as e:
+    st.warning(f"No se pudo cargar la sección de Producción/Planeamiento: {e}")
