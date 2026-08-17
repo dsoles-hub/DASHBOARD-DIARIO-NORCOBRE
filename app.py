@@ -24,7 +24,7 @@ st.markdown("""
 SHEET_ID = "1jgDh1ddqOVcNBsc4HEuCbjt0moOGDrMz"
 URL_DESCARGA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
 
-@st.cache_data(ttl=60) # Actualiza los datos cada 60 segundos
+@st.cache_data(ttl=60)
 def cargar_datos():
     response = requests.get(URL_DESCARGA)
     with open("temp_data.xlsx", "wb") as f:
@@ -187,56 +187,77 @@ promedio_diario = (ejecutado_total / dias_con_datos) if dias_con_datos > 0 else 
 # 4. RENDERIZAR DASHBOARD EN STREAMLIT
 # -------------------------------------------------------------
 
+# Título Limpio
+st.markdown("<h2 style='text-align: center; color: white;'>Reporte Diario de Planta - Balance Metalúrgico</h2>", unsafe_allow_html=True)
+
+# Formatear listas de texto limpias (ocultando ceros para evitar amontonamiento)
+text_mensual_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['MENSUAL Lb Cu Eq']]
+text_ejec_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['Lbs Cu Eq']]
+text_mensual_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['MENSUAL TRAT']]
+text_ejec_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['EJEC TRAT']]
+
 # Gráfico Principal
 fig_main = make_subplots(specs=[[{"secondary_y": True}]])
+
+# Barras Mensual
 fig_main.add_trace(go.Bar(
-    x=df_res['Etiqueta'], y=df_res['MENSUAL Lb Cu Eq'], name='MENSUAL Lb Cu Eq', marker_color='#3366CC',
-    text=df_res['MENSUAL Lb Cu Eq'].apply(lambda x: f"{x:.0f}"), textposition='auto', textfont=dict(size=8)
+    x=df_res['Etiqueta'], y=df_res['MENSUAL Lb Cu Eq'], name='MENSUAL Lb Cu Eq', marker_color='#2A629A',
+    text=text_mensual_lbs, textposition='inside', textfont=dict(size=9, color='white')
 ), secondary_y=False)
 
+# Barras Ejecutado
 fig_main.add_trace(go.Bar(
-    x=df_res['Etiqueta'], y=df_res['Lbs Cu Eq'], name='EJECUTADO Lb Cu Eq', marker_color='#ED7D31',
-    text=df_res['Lbs Cu Eq'].apply(lambda x: f"{x:.0f}" if x > 0 else ""), textposition='auto', textfont=dict(size=8)
+    x=df_res['Etiqueta'], y=df_res['Lbs Cu Eq'], name='EJECUTADO Lb Cu Eq', marker_color='#FF7F3E',
+    text=text_ejec_lbs, textposition='inside', textfont=dict(size=9, color='white')
 ), secondary_y=False)
 
+# Línea Plan Tratamiento
 fig_main.add_trace(go.Scatter(
     x=df_res['Etiqueta'], y=df_res['MENSUAL TRAT'], name='PLAN MENSUAL TMS TRAT', mode='lines+markers+text',
-    line=dict(color='#C00000', width=2), marker=dict(size=5),
-    text=df_res['MENSUAL TRAT'].apply(lambda x: f"{x:,.0f}"), textposition='top center', textfont=dict(size=8, color='#C00000')
+    line=dict(color='#FF2E63', width=2), marker=dict(size=4),
+    text=text_mensual_trat, textposition='top center', textfont=dict(size=8, color='#FF2E63')
 ), secondary_y=True)
 
+# Línea Ejecutado Tratamiento (Solo grafica donde hay datos reales > 0)
+ejec_trat_masked = [x if x > 0 else None for x in df_res['EJEC TRAT']]
 fig_main.add_trace(go.Scatter(
-    x=df_res['Etiqueta'], y=df_res['EJEC TRAT'], name='EJECUTADO TMS TRAT', mode='lines+markers+text',
-    line=dict(color='#FFC000', width=2), marker=dict(size=5),
-    text=df_res['EJEC TRAT'].apply(lambda x: f"{x:,.0f}" if x > 0 else ""), textposition='bottom center', textfont=dict(size=8, color='#B8860B')
+    x=df_res['Etiqueta'], y=ejec_trat_masked, name='EJECUTADO TMS TRAT', mode='lines+markers+text',
+    line=dict(color='#FFD700', width=2), marker=dict(size=5),
+    text=text_ejec_trat, textposition='bottom center', textfont=dict(size=8, color='#FFD700')
 ), secondary_y=True)
 
 fig_main.update_layout(
-    title=dict(text="<b>Reporte Diario de Planta - Balance Metalúrgico</b>", x=0.5, font=dict(size=18)),
-    template='plotly_white', height=450, barmode='group',
-    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-    margin=dict(l=20, r=20, t=50, b=20)
+    template='plotly_dark',
+    height=480,
+    barmode='group',
+    legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='center', x=0.5, font=dict(size=11)),
+    margin=dict(l=30, r=30, t=40, b=30),
+    paper_bgcolor='rgba(0,0,0,0)',
+    plot_bgcolor='rgba(0,0,0,0)'
 )
-fig_main.update_xaxes(tickangle=-45)
-fig_main.update_yaxes(title_text="<b>Lb Cu Eq (Miles)</b>", secondary_y=False)
+fig_main.update_xaxes(tickangle=-45, tickfont=dict(size=10))
+fig_main.update_yaxes(title_text="<b>Lb Cu Eq (Miles)</b>", secondary_y=False, showgrid=True, gridcolor='#333333')
 fig_main.update_yaxes(title_text="<b>Tratamiento (TMS)</b>", secondary_y=True, showgrid=False)
 
 st.plotly_chart(fig_main, use_container_width=True)
 
+st.write("") # Espaciador
+
 # Sección Inferior (2 gráficos secundarios + 2 KPIs)
-col1, col2, col3, col4 = st.columns([1.2, 1.0, 0.9, 0.9])
+col1, col2, col3, col4 = st.columns([1.1, 1.0, 0.9, 0.9])
 
 with col1:
     fig_mensual = go.Figure()
     fig_mensual.add_trace(go.Bar(
         x=['EJEC + PROY', 'EJECUTADO', 'MENSUAL'], y=[ejec_mas_proy, ejecutado_total, mensual_total],
-        marker_color=['#FF0000', '#FFC000', '#4472C4'],
+        marker_color=['#E63946', '#FFB703', '#1D3557'],
         text=[f"{ejec_mas_proy:.0f}", f"{ejecutado_total:.0f}", f"{mensual_total:.0f}"], textposition='outside',
-        textfont=dict(size=12, color='black', family='Arial Black')
+        textfont=dict(size=11, color='white')
     ))
     fig_mensual.update_layout(
-        title=dict(text="<b>CUMPLIMIENTO MENSUAL</b>", x=0.5, font=dict(size=13)),
-        template='plotly_white', height=280, margin=dict(l=10, r=10, t=35, b=10),
+        title=dict(text="<b>CUMPLIMIENTO MENSUAL</b>", x=0.5, font=dict(size=12, color='white')),
+        template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(ejec_mas_proy, mensual_total) * 1.25])
     )
     st.plotly_chart(fig_mensual, use_container_width=True)
@@ -245,29 +266,30 @@ with col2:
     fig_a_fecha = go.Figure()
     fig_a_fecha.add_trace(go.Bar(
         x=['MENSUAL', 'EJECUTADO'], y=[mensual_a_la_fecha, ejecutado_total],
-        marker_color=['#4472C4', '#FFC000'],
+        marker_color=['#1D3557', '#FFB703'],
         text=[f"{mensual_a_la_fecha:.0f}", f"{ejecutado_total:.0f}"], textposition='outside',
-        textfont=dict(size=12, color='black', family='Arial Black')
+        textfont=dict(size=11, color='white')
     ))
     fig_a_fecha.update_layout(
-        title=dict(text="<b>CUMPLIMIENTO A LA FECHA</b>", x=0.5, font=dict(size=13)),
-        template='plotly_white', height=280, margin=dict(l=10, r=10, t=35, b=10),
+        title=dict(text="<b>CUMPLIMIENTO A LA FECHA</b>", x=0.5, font=dict(size=12, color='white')),
+        template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(mensual_a_la_fecha, ejecutado_total) * 1.25])
     )
     st.plotly_chart(fig_a_fecha, use_container_width=True)
 
 with col3:
     st.markdown(f"""
-        <div style="background-color: #92D050; border: 2px solid black; padding: 20px 10px; text-align: center; margin-top: 25px;">
-            <div style="font-size: 13px; font-weight: bold; color: black; margin-bottom: 10px;">CUMPLIMIENTO A LA FECHA</div>
-            <div style="font-size: 42px; font-weight: 900; color: black; font-family: 'Arial Black';">{cumplimiento_pct:.0f}%</div>
+        <div style="background-color: #88D66C; border: 2px solid #55AD9B; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
+            <div style="font-size: 13px; font-weight: bold; color: black; margin-bottom: 8px;">CUMPLIMIENTO A LA FECHA</div>
+            <div style="font-size: 40px; font-weight: 900; color: black; font-family: 'Arial Black';">{cumplimiento_pct:.0f}%</div>
         </div>
     """, unsafe_allow_html=True)
 
 with col4:
     st.markdown(f"""
-        <div style="background-color: #92D050; border: 2px solid black; padding: 20px 10px; text-align: center; margin-top: 25px;">
-            <div style="font-size: 13px; font-weight: bold; color: black; margin-bottom: 10px;">PROMEDIO EJECUTADO DIARIO</div>
-            <div style="font-size: 42px; font-weight: 900; color: black; font-family: 'Arial Black';">{promedio_diario:.0f}</div>
+        <div style="background-color: #88D66C; border: 2px solid #55AD9B; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
+            <div style="font-size: 13px; font-weight: bold; color: black; margin-bottom: 8px;">PROMEDIO EJECUTADO DIARIO</div>
+            <div style="font-size: 40px; font-weight: 900; color: black; font-family: 'Arial Black';">{promedio_diario:.0f}</div>
         </div>
     """, unsafe_allow_html=True)
