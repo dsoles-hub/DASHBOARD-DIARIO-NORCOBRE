@@ -1,68 +1,93 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import openpyxl
+import io
 import requests
+import openpyxl
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Configuración de la página
+# -------------------------------------------------------------
+# CONFIGURACIÓN DE PÁGINA
+# -------------------------------------------------------------
 st.set_page_config(page_title="Dashboard Planta - Balance Metalúrgico", layout="wide")
 
-# Ocultar menú superior y footer de Streamlit
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
+    .kpi-card {
+        background-color: #1E293B;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    .kpi-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #94A3B8;
+        margin-bottom: 5px;
+    }
+    .kpi-value {
+        font-size: 1.8rem;
+        font-weight: 800;
+        color: #38BDF8;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 1. DESCARGA EN VIVO DESDE GOOGLE SHEETS
+# 1. PARÁMETROS ECONÓMICOS Y CARGA EN MEMORIA
 # -------------------------------------------------------------
-SHEET_ID = "16qHmnhtgGDETeOCeahGZ-Ka_8a2d0KYH"
-URL_DESCARGA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
-
-@st.cache_data(ttl=60)
-def cargar_datos():
-    response = requests.get(URL_DESCARGA)
-    with open("temp_data.xlsx", "wb") as f:
-        f.write(response.content)
-    return "temp_data.xlsx"
-
-try:
-    excel_file = cargar_datos()
-except Exception as e:
-    st.error(f"Error al conectar con Google Sheets: {e}")
-    st.stop()
-
-# Parámetros Económicos
 CU_PRICE = 11084.00
 PB_PRICE = 1981.00
 ZN_PRICE = 3041.00
 AG_PRICE = 53.05
 FACTOR_TN_LBS = 2204.62
 
+SHEET_ID = "16qHmnhtgGDETeOCeahGZ-Ka_8a2d0KYH"
+URL_DESCARGA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
+
+@st.cache_data(ttl=60)
+def obtener_bytes_excel(url: str) -> io.BytesIO:
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+    return io.BytesIO(response.content)
+
+try:
+    excel_stream = obtener_bytes_excel(URL_DESCARGA)
+except Exception as e:
+    st.error(f"Error al conectar con Google Sheets: {e}")
+    st.stop()
+
 # -------------------------------------------------------------
-# 2. LECTURA DE HOJAS
+# 2. PROCESAMIENTO DE DATOS
 # -------------------------------------------------------------
-# A) MES PPT
-df_ppt_raw = pd.read_excel(excel_file, sheet_name='MES PPT')
+
+# A) PROCESAR 'MES PPT'
+excel_stream.seek(0)
+df_ppt_raw = pd.read_excel(excel_stream, sheet_name='MES PPT')
 df_ppt_raw.columns = df_ppt_raw.iloc[0]
 df_ppt = df_ppt_raw.iloc[1:].reset_index(drop=True)
 
 mensual_lbs_dict = {}
 for _, row in df_ppt.iterrows():
-    fecha_val = row['FECHA']
+    fecha_val = row.get('FECHA')
     if pd.notna(fecha_val):
-        f_str = pd.to_datetime(fecha_val).strftime("%d/%m/%Y")
+        try:
+            f_str = pd.to_datetime(fecha_val).strftime("%d/%m/%Y")
+        except Exception:
+            continue
+            
         zn_ppt = float(row.get('Fines Zn_EZ', 0.0) or 0.0)
         pb_ppt = float(row.get('Fines Pb_EP', 0.0) or 0.0)
         cu_ppt = float(row.get('Fines Cu_EC', 0.0) or 0.0)
         ag_cu_ppt = float(row.get('Fines Ag_EC', 0.0) or 0.0)
         ag_pb_ppt = float(row.get('Fines Ag_EP', 0.0) or 0.0)
-        ag_zn_ppt = float(row.get('Oz/t Ag_EZ', 0.0) or 0.0)
+        ag_zn_ppt = float(row.get('Fines Ag_EZ', row.get('Oz/t Ag_EZ', 0.0)) or 0.0)
 
         val_zn = zn_ppt * ZN_PRICE
         val_pb = pb_ppt * PB_PRICE
@@ -74,55 +99,69 @@ for _, row in df_ppt.iterrows():
 
         mensual_lbs_dict[f_str] = lbs_cueq_ppt
 
-# B) TRATAMIENTO
-xl = pd.ExcelFile(excel_file)
+# B) PROCESAR HOJA DE TRATAMIENTO
+excel_stream.seek(0)
+xl = pd.ExcelFile(excel_stream)
 sheet_trat_name = next((s for s in xl.sheet_names if 'TRAT' in s.upper()), None)
 mensual_trat_dict, ejec_trat_dict = {}, {}
 
 if sheet_trat_name:
-    df_trat = pd.read_excel(excel_file, sheet_name=sheet_trat_name)
+    df_trat = pd.read_excel(excel_stream, sheet_name=sheet_trat_name)
     for _, row in df_trat.iterrows():
         fecha_val = row.get('FECHA')
         if pd.notna(fecha_val):
-            f_str = pd.to_datetime(fecha_val).strftime("%d/%m/%Y")
+            try:
+                f_str = pd.to_datetime(fecha_val).strftime("%d/%m/%Y")
+            except Exception:
+                continue
             ejec_val = row.get('EJECTUADO Lb Cu Eq', row.get('EJECUTADO Lb Cu Eq', row.get('EJEC TRAT', 0.0)))
             mens_val = row.get('MENSUAL Lb Cu Eq', row.get('MENSUAL TRAT', 0.0))
             ejec_trat_dict[f_str] = float(ejec_val) if pd.notna(ejec_val) else 0.0
             mensual_trat_dict[f_str] = float(mens_val) if pd.notna(mens_val) else 0.0
 
-# C) AGOSTO
-wb_in = openpyxl.load_workbook(excel_file, data_only=True)
+# C) PROCESAR HOJA 'AGOSTO'
+excel_stream.seek(0)
+wb_in = openpyxl.load_workbook(excel_stream, data_only=True)
 sheet_agosto_name = next((s for s in wb_in.sheetnames if 'AGOSTO' in s.strip().upper()), 'AGOSTO')
 ws_agosto = wb_in[sheet_agosto_name]
 
 agosto_data_dict = {}
+
 def clean_val(val):
-    try: return float(val) if val is not None else 0.0
-    except: return 0.0
+    try:
+        return float(val) if val is not None else 0.0
+    except (ValueError, TypeError):
+        return 0.0
 
 for r in range(1, ws_agosto.max_row + 1):
     val_a = ws_agosto.cell(row=r, column=1).value
-    if not val_a: continue
+    if not val_a:
+        continue
+    
     f_str = None
     if isinstance(val_a, (datetime.datetime, datetime.date)):
         f_str = val_a.strftime("%d/%m/%Y")
     else:
-        try: f_str = pd.to_datetime(str(val_a).strip(), dayfirst=True).strftime("%d/%m/%Y")
-        except: continue
-    if not f_str: continue
+        try:
+            f_str = pd.to_datetime(str(val_a).strip(), dayfirst=True).strftime("%d/%m/%Y")
+        except Exception:
+            continue
+            
+    if not f_str:
+        continue
 
     zn_tms, pb_tms, cu_tms, ag_cu, ag_pb, ag_zn = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     for sub_r in range(r, min(r + 15, ws_agosto.max_row + 1)):
         prod_raw = str(ws_agosto.cell(row=sub_r, column=1).value or '').replace(" ", "").upper()
         if 'CONC.CU' in prod_raw:
             cu_tms = clean_val(ws_agosto.cell(row=sub_r, column=9).value)
-            ag_cu  = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
+            ag_cu = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
         elif 'CONC.PB' in prod_raw:
             pb_tms = clean_val(ws_agosto.cell(row=sub_r, column=10).value)
-            ag_pb  = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
+            ag_pb = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
         elif 'CONC.ZN' in prod_raw:
             zn_tms = clean_val(ws_agosto.cell(row=sub_r, column=11).value)
-            ag_zn  = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
+            ag_zn = clean_val(ws_agosto.cell(row=sub_r, column=12).value)
 
     agosto_data_dict[f_str] = {
         'cu_tms': cu_tms, 'pb_tms': pb_tms, 'zn_tms': zn_tms,
@@ -130,7 +169,7 @@ for r in range(1, ws_agosto.max_row + 1):
     }
 
 # -------------------------------------------------------------
-# 3. TRANSFORMACIÓN Y TABLA
+# 3. CONSTRUCCIÓN DE LA TABLA CONSOLIDADA
 # -------------------------------------------------------------
 base_date = datetime.date(2026, 7, 26)
 date_list = [base_date + datetime.timedelta(days=i) for i in range(31)]
@@ -165,32 +204,29 @@ for d in date_list:
 headers = [
     'Fecha', 'Etiqueta', 'Zn (TMS)', 'Pb (TMS)', 'Cu (TMS)', 'Ag en Cu (Oz)', 'Ag en Pb (Oz)', 'Ag en Zn (Oz)',
     '$ Zn', '$ Pb', '$ Ag', '$ TOTALES', 'CuEq sin Cont. Metal. de Cu', 'Cu Equivalente TMS',
-    'Factor converion Tn a Lbs', 'Lbs Cu Eq', 'MENSUAL Lb Cu Eq', 'MENSUAL TRAT', 'EJEC TRAT'
+    'Factor conversion Tn a Lbs', 'Lbs Cu Eq', 'MENSUAL Lb Cu Eq', 'MENSUAL TRAT', 'EJEC TRAT'
 ]
 df_res = pd.DataFrame(rows_data, columns=headers)
 
-# Cálculos KPI
+# KPI Calculations
 df_ejecutado = df_res[df_res['Lbs Cu Eq'] > 0]
 dias_con_datos = len(df_ejecutado)
 
 ejecutado_total = df_ejecutado['Lbs Cu Eq'].sum()
 mensual_total = df_res['MENSUAL Lb Cu Eq'].sum()
 
-mensual_a_la_fecha = df_res.iloc[:dias_con_datos]['MENSUAL Lb Cu Eq'].sum()
-proyeccion_restante = df_res.iloc[dias_con_datos:]['MENSUAL Lb Cu Eq'].sum()
+mensual_a_la_fecha = df_res.iloc[:dias_con_datos]['MENSUAL Lb Cu Eq'].sum() if dias_con_datos > 0 else 0.0
+proyeccion_restante = df_res.iloc[dias_con_datos:]['MENSUAL Lb Cu Eq'].sum() if dias_con_datos < len(df_res) else 0.0
 ejec_mas_proy = ejecutado_total + proyeccion_restante
 
-cumplimiento_pct = (ejecutado_total / mensual_a_la_fecha * 100) if mensual_a_la_fecha > 0 else 0
-promedio_diario = (ejecutado_total / dias_con_datos) if dias_con_datos > 0 else 0
+cumplimiento_pct = (ejecutado_total / mensual_a_la_fecha * 100) if mensual_a_la_fecha > 0 else 0.0
+promedio_diario = (ejecutado_total / dias_con_datos) if dias_con_datos > 0 else 0.0
 
 # -------------------------------------------------------------
-# 4. RENDERIZAR DASHBOARD EN STREAMLIT
+# 4. DASHBOARD STYLING & RENDERING
 # -------------------------------------------------------------
+st.title("Reporte Diario de Planta - Balance Metalúrgico")
 
-# Título Limpio
-st.markdown("<h2 style='text-align: center; color: white;'>Reporte Diario de Planta - Balance Metalúrgico</h2>", unsafe_allow_html=True)
-
-# Formatear listas de texto limpias (ocultando ceros para evitar amontonamiento)
 text_mensual_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['MENSUAL Lb Cu Eq']]
 text_ejec_lbs = [f"{x:.0f}" if x > 0 else "" for x in df_res['Lbs Cu Eq']]
 text_mensual_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['MENSUAL TRAT']]
@@ -199,26 +235,22 @@ text_ejec_trat = [f"{x:,.0f}" if x > 0 else "" for x in df_res['EJEC TRAT']]
 # Gráfico Principal
 fig_main = make_subplots(specs=[[{"secondary_y": True}]])
 
-# Barras Mensual
 fig_main.add_trace(go.Bar(
     x=df_res['Etiqueta'], y=df_res['MENSUAL Lb Cu Eq'], name='MENSUAL Lb Cu Eq', marker_color='#2A629A',
     text=text_mensual_lbs, textposition='inside', textfont=dict(size=9, color='white')
 ), secondary_y=False)
 
-# Barras Ejecutado
 fig_main.add_trace(go.Bar(
     x=df_res['Etiqueta'], y=df_res['Lbs Cu Eq'], name='EJECUTADO Lb Cu Eq', marker_color='#FF7F3E',
     text=text_ejec_lbs, textposition='inside', textfont=dict(size=9, color='white')
 ), secondary_y=False)
 
-# Línea Plan Tratamiento
 fig_main.add_trace(go.Scatter(
     x=df_res['Etiqueta'], y=df_res['MENSUAL TRAT'], name='PLAN MENSUAL TMS TRAT', mode='lines+markers+text',
     line=dict(color='#FF2E63', width=2), marker=dict(size=4),
     text=text_mensual_trat, textposition='top center', textfont=dict(size=8, color='#FF2E63')
 ), secondary_y=True)
 
-# Línea Ejecutado Tratamiento (Solo grafica donde hay datos reales > 0)
 ejec_trat_masked = [x if x > 0 else None for x in df_res['EJEC TRAT']]
 fig_main.add_trace(go.Scatter(
     x=df_res['Etiqueta'], y=ejec_trat_masked, name='EJECUTADO TMS TRAT', mode='lines+markers+text',
@@ -241,9 +273,7 @@ fig_main.update_yaxes(title_text="<b>Tratamiento (TMS)</b>", secondary_y=True, s
 
 st.plotly_chart(fig_main, use_container_width=True)
 
-st.write("") # Espaciador
-
-# Sección Inferior (2 gráficos secundarios + 2 KPIs)
+# Sección de Resumen e Indicadores
 col1, col2, col3, col4 = st.columns([1.1, 1.0, 0.9, 0.9])
 
 with col1:
@@ -258,7 +288,7 @@ with col1:
         title=dict(text="<b>CUMPLIMIENTO MENSUAL</b>", x=0.5, font=dict(size=12, color='white')),
         template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(ejec_mas_proy, mensual_total) * 1.25])
+        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(ejec_mas_proy, mensual_total, 1.0) * 1.25])
     )
     st.plotly_chart(fig_mensual, use_container_width=True)
 
@@ -274,22 +304,22 @@ with col2:
         title=dict(text="<b>CUMPLIMIENTO A LA FECHA</b>", x=0.5, font=dict(size=12, color='white')),
         template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(mensual_a_la_fecha, ejecutado_total) * 1.25])
+        yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(mensual_a_la_fecha, ejecutado_total, 1.0) * 1.25])
     )
     st.plotly_chart(fig_a_fecha, use_container_width=True)
 
 with col3:
     st.markdown(f"""
-        <div style="background-color: #88D66C; border: 2px solid #55AD9B; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
-            <div style="font-size: 13px; font-weight: bold; color: black; margin-bottom: 8px;">CUMPLIMIENTO A LA FECHA</div>
-            <div style="font-size: 40px; font-weight: 900; color: black; font-family: 'Arial Black';">{cumplimiento_pct:.0f}%</div>
+        <div class="kpi-card">
+            <div class="kpi-title">CUMPLIMIENTO A LA FECHA</div>
+            <div class="kpi-value">{cumplimiento_pct:.0f}%</div>
         </div>
     """, unsafe_allow_html=True)
 
 with col4:
     st.markdown(f"""
-        <div style="background-color: #88D66C; border: 2px solid #55AD9B; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
-            <div style="font-size: 13px; font-weight: bold; color: black; margin-bottom: 8px;">PROMEDIO EJECUTADO DIARIO</div>
-            <div style="font-size: 40px; font-weight: 900; color: black; font-family: 'Arial Black';">{promedio_diario:.0f}</div>
+        <div class="kpi-card">
+            <div class="kpi-title">PROMEDIO EJECUTADO DIARIO</div>
+            <div class="kpi-value">{promedio_diario:,.0f}</div>
         </div>
     """, unsafe_allow_html=True)
