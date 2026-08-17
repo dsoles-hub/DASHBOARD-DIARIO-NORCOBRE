@@ -301,14 +301,24 @@ with col4:
 # =============================================================
 st.markdown("<br><hr style='border-color: #333333;'><br>", unsafe_allow_html=True)
 
-# Lector de pestañas 'PLANEAMIENTO' y 'PRODUCCION'
 try:
     excel_stream.seek(0)
-    df_plan_raw = pd.read_excel(excel_stream, sheet_name='PLANEAMIENTO')
-    excel_stream.seek(0)
-    df_prod_raw = pd.read_excel(excel_stream, sheet_name='PRODUCCION')
+    xl_prod = pd.ExcelFile(excel_stream)
+    
+    # Búsqueda flexible de nombres de pestañas (ignora tildes y mayúsculas)
+    sheet_plan = next((s for s in xl_prod.sheet_names if 'PLAN' in s.upper()), None)
+    sheet_prod = next((s for s in xl_prod.sheet_names if 'PRODU' in s.upper()), None)
 
-    # Renombrar TMS-ACUMULADO a EJECUTADO
+    if not sheet_plan or not sheet_prod:
+        st.error(f"No se encontraron las pestañas. Pestañas disponibles en el Excel: {xl_prod.sheet_names}")
+        st.stop()
+
+    excel_stream.seek(0)
+    df_plan_raw = pd.read_excel(excel_stream, sheet_name=sheet_plan)
+    excel_stream.seek(0)
+    df_prod_raw = pd.read_excel(excel_stream, sheet_name=sheet_prod)
+
+    # Renombrar TMS-ACUMULADO a EJECUTADO si existe
     if 'TMS-ACUMULADO' in df_prod_raw.columns:
         df_prod_raw = df_prod_raw.rename(columns={'TMS-ACUMULADO': 'EJECUTADO'})
 
@@ -319,7 +329,7 @@ try:
     # Fusión por fecha
     df_prod_mix = pd.merge(df_plan_raw, df_prod_raw[['FECHA', 'EJECUTADO']], on='FECHA', how='left')
 
-    # Actualización de EJEC + PROYEC: Si hay EJECUTADO > 0, se asigna EJECUTADO; de lo contrario se deja el proyectado
+    # Actualización de EJEC + PROYEC
     df_prod_mix['EJEC + PROYEC'] = df_prod_mix.apply(
         lambda r: r['EJECUTADO'] if (pd.notna(r['EJECUTADO']) and r['EJECUTADO'] > 0) else r['EJEC + PROYEC'],
         axis=1
@@ -338,103 +348,3 @@ try:
     p_mensual_a_la_fecha = df_prod_mix.iloc[:dias_p_ejec]['MENSUAL'].sum() if dias_p_ejec > 0 else 0
     p_cumplimiento_pct = (p_ejecutado_total / p_mensual_a_la_fecha * 100) if p_mensual_a_la_fecha > 0 else 0
     p_promedio_diario = (p_ejecutado_total / dias_p_ejec) if dias_p_ejec > 0 else 0
-
-    # -------------------------------------------------------------
-    # 6. RENDERIZAR DASHBOARD 2: PRODUCCIÓN (TMS)
-    # -------------------------------------------------------------
-    st.markdown("<h2 style='text-align: center; color: white;'>PRODUCCIÓN (TMS)</h2>", unsafe_allow_html=True)
-
-    text_p_ejec = [f"{x:,.0f}" if (pd.notna(x) and x > 0) else "" for x in df_prod_mix['EJECUTADO']]
-    text_p_sem = [f"{x:,.0f}" if (pd.notna(x) and x > 0) else "" for x in df_prod_mix['SEMANAL']]
-    text_p_mens = [f"{x:,.0f}" if (pd.notna(x) and x > 0) else "" for x in df_prod_mix['MENSUAL']]
-
-    fig_p_main = go.Figure()
-
-    # Barras EJECUTADO
-    fig_p_main.add_trace(go.Bar(
-        x=df_prod_mix['Etiqueta'], y=df_prod_mix['EJECUTADO'], name='EJECUTADO', marker_color='#2A629A',
-        text=text_p_ejec, textposition='inside', textfont=dict(size=9, color='white')
-    ))
-
-    # Línea SEMANAL
-    fig_p_main.add_trace(go.Scatter(
-        x=df_prod_mix['Etiqueta'], y=df_prod_mix['SEMANAL'], name='SEMANAL', mode='lines+markers+text',
-        line=dict(color='#FFD700', width=2), marker=dict(size=5),
-        text=text_p_sem, textposition='top center', textfont=dict(size=8, color='#FFD700')
-    ))
-
-    # Línea MENSUAL
-    fig_p_main.add_trace(go.Scatter(
-        x=df_prod_mix['Etiqueta'], y=df_prod_mix['MENSUAL'], name='MENSUAL', mode='lines+markers+text',
-        line=dict(color='#FF2E63', width=2), marker=dict(size=4),
-        text=text_p_mens, textposition='bottom center', textfont=dict(size=8, color='#FF2E63')
-    ))
-
-    fig_p_main.update_layout(
-        template='plotly_dark',
-        height=480,
-        legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='center', x=0.5, font=dict(size=11)),
-        margin=dict(l=30, r=30, t=40, b=30),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)'
-    )
-    fig_p_main.update_xaxes(tickangle=-45, tickfont=dict(size=10))
-    fig_p_main.update_yaxes(title_text="<b>Producción (TMS)</b>", showgrid=True, gridcolor='#333333')
-
-    st.plotly_chart(fig_p_main, use_container_width=True)
-
-    st.write("") 
-
-    # Cuadros inferiores Producción (TMS)
-    p_col1, p_col2, p_col3, p_col4 = st.columns([1.1, 1.0, 0.9, 0.9])
-
-    with p_col1:
-        fig_p_mensual = go.Figure()
-        fig_p_mensual.add_trace(go.Bar(
-            x=['EJEC + PROY', 'EJECUTADO', 'MENSUAL'], y=[p_ejec_proy_total, p_ejecutado_total, p_mensual_total],
-            marker_color=['#E63946', '#FFB703', '#1D3557'],
-            text=[f"{p_ejec_proy_total:,.0f}", f"{p_ejecutado_total:,.0f}", f"{p_mensual_total:,.0f}"],
-            textposition='outside', textfont=dict(size=11, color='white')
-        ))
-        fig_p_mensual.update_layout(
-            title=dict(text="<b>PRODUCCIÓN (TMS)</b>", x=0.5, font=dict(size=12, color='white')),
-            template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(p_ejec_proy_total, p_mensual_total, 1.0) * 1.25])
-        )
-        st.plotly_chart(fig_p_mensual, use_container_width=True)
-
-    with p_col2:
-        fig_p_a_fecha = go.Figure()
-        fig_p_a_fecha.add_trace(go.Bar(
-            x=['MENSUAL', 'EJECUTADO'], y=[p_mensual_a_la_fecha, p_ejecutado_total],
-            marker_color=['#1D3557', '#FFB703'],
-            text=[f"{p_mensual_a_la_fecha:,.0f}", f"{p_ejecutado_total:,.0f}"],
-            textposition='outside', textfont=dict(size=11, color='white')
-        ))
-        fig_p_a_fecha.update_layout(
-            title=dict(text="<b>CUMPLIMIENTO A LA FECHA</b>", x=0.5, font=dict(size=12, color='white')),
-            template='plotly_dark', height=260, margin=dict(l=10, r=10, t=35, b=10),
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            yaxis=dict(showticklabels=False, showgrid=False, range=[0, max(p_mensual_a_la_fecha, p_ejecutado_total, 1.0) * 1.25])
-        )
-        st.plotly_chart(fig_p_a_fecha, use_container_width=True)
-
-    with p_col3:
-        st.markdown(f"""
-            <div style="background-color: #1A2536; border: 1px solid #2E3E52; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
-                <div style="font-size: 13px; font-weight: bold; color: #8A99AD; margin-bottom: 8px;">CUMPLIMIENTO A LA FECHA</div>
-                <div style="font-size: 40px; font-weight: 900; color: #38BDF8; font-family: 'Arial Black';">{p_cumplimiento_pct:.0f}%</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    with p_col4:
-        st.markdown(f"""
-            <div style="background-color: #1A2536; border: 1px solid #2E3E52; border-radius: 8px; padding: 20px 10px; text-align: center; margin-top: 20px;">
-                <div style="font-size: 13px; font-weight: bold; color: #8A99AD; margin-bottom: 8px;">PROMEDIO EJECUTADO DIARIO</div>
-                <div style="font-size: 40px; font-weight: 900; color: #38BDF8; font-family: 'Arial Black';">{p_promedio_diario:,.0f}</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-except Exception as e:
-    st.warning(f"No se pudo cargar la sección de Producción/Planeamiento: {e}")
